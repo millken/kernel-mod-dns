@@ -37,6 +37,7 @@ static struct nf_hook_ops nfho_post;
 static struct proc_dir_entry *dnsc;
 static int port_count;
 static int port[QUAN];
+static int count;
 struct sk_buff *sock_buff;
 struct iphdr *ip_header;            //ip header struct
 struct udphdr *udp_header; 
@@ -51,22 +52,31 @@ inet_addr(char *str)
   return *(unsigned int*)arr; 
 } 
 
-int 
-dnsc_read (char *buffer, char **buffer_location, off_t offset, 
-            int buffer_length, int *eof, void *data)
+static int 
+dnsc_read (struct seq_file *m, void *v)
 {
-  int len;
-  len = sprintf(buffer, "%d\n", *((int*)data));
-  return len;
+  seq_printf(m, "%d\n", count);
+  return 0;
 }
+
+static int proc_open(struct inode *inode, struct  file *file) {
+  return single_open(file, dnsc_read, NULL);
+}
+
+static const struct file_operations proc_file_fops = {
+ .owner = THIS_MODULE,
+ .open  = proc_open,
+ .read  = seq_read,
+ .llseek = seq_lseek,
+ .release = single_release,
+};
 
 
 unsigned int 
-hook_func(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in, 
+hook_func(const struct nf_hook_ops *ops, struct sk_buff *skb, const struct net_device *in, 
             const struct net_device *out, int (*okfn)(struct sk_buff *))
 {
         int i;
-        static int count = 0;
         sock_buff = skb;
         ip_header = (struct iphdr *)skb_network_header(sock_buff);    //grab network header using accessor
         udp_header = (struct udphdr *)((__u32 *)ip_header+ ip_header->ihl);
@@ -77,8 +87,6 @@ hook_func(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in
             for (i = 0; i < QUAN; i++) {
               if (port[i] == ntohs(udp_header->dest)) {
                 count++;
-                dnsc->data = &count;
-                dnsc->read_proc  = dnsc_read;
                 ip_header->check = 0;
                 ip_header->saddr = inet_addr(INDNS);
                 ip_header->check = ip_fast_csum((u8 *) ip_header, ip_header->ihl);
@@ -88,7 +96,7 @@ hook_func(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in
 }
 
 unsigned int 
-post_hook(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in, 
+post_hook(const struct nf_hook_ops *ops, struct sk_buff *skb, const struct net_device *in, 
             const struct net_device *out, int (*okfn)(struct sk_buff *))
 {
         char dest[16];
@@ -135,6 +143,7 @@ post_hook(unsigned int hooknum, struct sk_buff *skb, const struct net_device *in
 int 
 init_module()
 {
+	      count = 0;
         port_count = 0;
         nfho.hook = hook_func;
         nfho.hooknum = NF_INET_PRE_ROUTING;
@@ -149,16 +158,12 @@ init_module()
         nf_register_hook(&nfho);
         nf_register_hook(&nfho_post);
         
-        dnsc = create_proc_entry(PROCFS_NAME, 0644, NULL);
+	      dnsc = proc_create(PROCFS_NAME, 0, NULL, &proc_file_fops);
         if (dnsc == NULL) {
           remove_proc_entry(PROCFS_NAME, NULL);
           printk(KERN_ALERT "Error: Could not initialize /proc/%s\n", PROCFS_NAME);
           return -ENOMEM;
         } 
-        
-        dnsc->mode   = S_IFREG | S_IRUGO;
-        dnsc->uid    = 0;
-        dnsc->gid    = 0;
 
         return 0;
 }
